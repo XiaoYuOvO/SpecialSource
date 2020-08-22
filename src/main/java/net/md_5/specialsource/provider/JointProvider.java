@@ -37,7 +37,7 @@ import java.util.List;
  */
 public class JointProvider implements InheritanceProvider {
 
-    private List<InheritanceProvider> inheritanceProviders = new ArrayList<InheritanceProvider>();
+    private List<InheritanceProvider> inheritanceProviders = new ArrayList<>();
 
     public void add(InheritanceProvider inheritanceProvider) {
         inheritanceProviders.add(inheritanceProvider);

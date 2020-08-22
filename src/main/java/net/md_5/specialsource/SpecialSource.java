@@ -33,15 +33,14 @@ import net.md_5.specialsource.util.FileLocator;
 import net.md_5.specialsource.provider.JointProvider;
 import net.md_5.specialsource.provider.JarProvider;
 import java.io.*;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
+import java.util.*;
+
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import joptsimple.OptionException;
 import joptsimple.OptionParser;
 import joptsimple.OptionSet;
+import net.md_5.specialsource.writer.WriteMethod;
 import org.objectweb.asm.ClassReader;
 
 import static java.util.Arrays.asList;
@@ -56,6 +55,12 @@ public class SpecialSource {
     public static boolean kill_generics = false;
     public static String identifier = null;
     public static boolean stable = false;
+    public static boolean kill_pkgInfo = false;
+    public static boolean kill_emptyDir = false;
+    public static boolean autoRemap = false;
+    public static WriteMethod writeMethod = WriteMethod.REPLACE;
+    public static File autoRemapOutFile;
+    public static List<String> autoRemapFilter;
 
     public static void main(String[] args) throws Exception {
         OptionParser parser = new OptionParser() {
@@ -130,6 +135,21 @@ public class SpecialSource {
                 acceptsAll(asList("kill-source"), "Removes the \"SourceFile\" attribute");
                 acceptsAll(asList("kill-lvt"), "Removes the \"LocalVariableTable\" attribute");
                 acceptsAll(asList("kill-generics"), "Removes the \"LocalVariableTypeTable\" and \"Signature\" attributes");
+                acceptsAll(asList("kill-pkgInfo"),"Remove the \"package-info.class\"");
+                acceptsAll(asList("kill-emptyDir"),"Remove the dir that doesn't contains any files");
+
+                accepts("remapWriteMethod","The method to write auto remapped mapping,can be REPLACE or APPEND").
+                        withOptionalArg().
+                        ofType(String.class).
+                        defaultsTo("REPLACE");
+                acceptsAll(asList("autoRemapFilter"),"A comma seperated list of packages will be auto remapped").withOptionalArg().ofType(String.class).defaultsTo("net/minecraft/");
+                acceptsAll(asList("autoRemap"),"Auto generate obfuscated name to all the classes that didn't specifies in srg in jar,and write to file.").
+                        requiredIf("autoRemapFilter","remapWriteMethod").
+                        withOptionalArg().
+                        ofType(File.class).
+                        describedAs("The file to write auto remapped mapping").
+                        defaultsTo(new File("auto_remap.srg"));
+
                 acceptsAll(asList("d", "identifier"), "Identifier to place on each class that is transformed, by default, none")
                         .withRequiredArg()
                         .ofType(String.class);
@@ -177,11 +197,33 @@ public class SpecialSource {
             return;
         }
 
+        if (options.has("autoRemap")){
+            autoRemap = true;
+            autoRemapOutFile = ((File) options.valueOf("autoRemap"));
+        }
+
+        if (options.has("autoRemapFilter")){
+            if (!autoRemap){
+                System.err.println("--autoRemapFilter Can only use when you used auto remap");
+                return;
+            }else {
+                autoRemapFilter = Arrays.asList(((String) options.valueOf("autoRemapFilter")).replace("\\","/").split(","));
+            }
+        }else {
+            autoRemapFilter = new ArrayList<>();
+        }
+
+        if (options.has("remapWriteMethod")){
+            writeMethod = WriteMethod.valueOf(options.valueOf("remapWriteMethod").toString().toUpperCase());
+        }
+
         JarMapping jarMapping;
         verbose = !options.has("quiet");
         kill_source = options.has("kill-source");
         kill_lvt = options.has("kill-lvt");
         kill_generics = options.has("kill-generics");
+        kill_pkgInfo = options.has("kill-pkgInfo");
+        kill_emptyDir = options.has("kill-emptyDir");
         
         if (options.has("identifier"))
         {
@@ -292,7 +334,7 @@ public class SpecialSource {
 
             log("Remapping final jar");
             JarRemapper jarRemapper = new JarRemapper(null, jarMapping, accessMapper);
-            jarRemapper.remapJar(jar3, (File) options.valueOf("out-jar"), new HashSet<String>((Collection<String>) options.valuesOf("only")));
+            jarRemapper.remapJar(jar3, (File) options.valueOf("out-jar"), new HashSet<>((List<String>) options.valuesOf("only")));
         }
 
 

@@ -44,8 +44,8 @@ import net.md_5.specialsource.JarRemapper;
  */
 public class MinecraftCodersPack extends MappingTransformer {
 
-    private final Map<String, String> fieldMap = new HashMap<String, String>(); // numeric srg name field_### -> descriptive csv name
-    private final Map<String, String> methodMap = new HashMap<String, String>(); // numeric srg name func_### -> descriptive csv name
+    private final Map<String, String> fieldMap = new HashMap<>(); // numeric srg name field_### -> descriptive csv name
+    private final Map<String, String> methodMap = new HashMap<>(); // numeric srg name func_### -> descriptive csv name
     private final Map<String, String> classPackageMap; // class src name -> repackaged full class name
 
     public MinecraftCodersPack(File fieldsCsv, File methodsCsv, File packagesCsv) throws IOException {
@@ -59,9 +59,9 @@ public class MinecraftCodersPack extends MappingTransformer {
 
         if (packagesCsv != null && packagesCsv.exists()) {
             // repackaged (FML)
-            classPackageMap = new HashMap<String, String>();
+            classPackageMap = new HashMap<>();
 
-            Map<String, String> packages = new HashMap<String, String>();
+            Map<String, String> packages = new HashMap<>();
             readIntoMap(packagesCsv, packages);
             for (Map.Entry<String, String> entry : packages.entrySet()) {
                 classPackageMap.put("net/minecraft/src/" + entry.getKey(), entry.getValue() + "/" + entry.getKey());

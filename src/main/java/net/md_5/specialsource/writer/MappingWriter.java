@@ -54,11 +54,17 @@ public abstract class MappingWriter {
 
     public abstract void addMethodMap(Ownable oldMethod, Ownable newMethod);
 
-    public final void write(PrintWriter out) {
+    public final void write(PrintWriter out){
+        write(out,false);
+    }
+
+    public final void write(PrintWriter out,boolean noHeader) {
         // Sort lines for easy finding
         Collections.sort(lines);
         // Format header
-        out.println(MessageFormat.format(HEADER, oldJarName, newJarName, new Date()));
+        if (!noHeader) {
+            out.println(MessageFormat.format(HEADER, oldJarName, newJarName, new Date()));
+        }
         // Write out lines
         for (String s : lines) {
             out.println(s);

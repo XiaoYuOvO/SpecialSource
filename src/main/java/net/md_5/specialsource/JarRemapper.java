@@ -28,23 +28,22 @@
  */
 package net.md_5.specialsource;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import net.md_5.specialsource.repo.ClassRepo;
 import net.md_5.specialsource.repo.JarRepo;
+import net.md_5.specialsource.util.StringUtil;
+import net.md_5.specialsource.writer.Searge;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.tree.ClassNode;
 import static org.objectweb.asm.ClassWriter.*;
 
 public class JarRemapper extends CustomRemapper {
-
+    private static int autoRemapNameIndex = 1;
+    public static final Map<String,String> autoRemapClasses = new HashMap<>();
     private static final int CLASS_LEN = ".class".length();
     private RemapperProcessor preProcessor;
     public final JarMapping jarMapping;
@@ -93,6 +92,23 @@ public class JarRemapper extends CustomRemapper {
         return mapped != null ? mapped : defaultIfUnmapped;
     }
 
+    public static String getNextAutoRemapName(Map<String,String> classes,String className){
+        if (SpecialSource.autoRemapFilter.isEmpty() || SpecialSource.autoRemapFilter.stream().anyMatch(className::contains)) {
+            if (classes != null) {
+                String next = StringUtil.toBase26(autoRemapNameIndex);
+                while (classes.containsValue(next)) {
+                    next = StringUtil.toBase26(autoRemapNameIndex++);
+                }
+                classes.put(className, next);
+                autoRemapClasses.put(className,next);
+                return next;
+            }else {
+                return null;
+            }
+        }else return null;
+    }
+
+
     /**
      * Helper method to map a class name by package (prefix) or class (exact)
      */
@@ -106,14 +122,12 @@ public class JarRemapper extends CustomRemapper {
         {
             String outer = className.substring(0, index);
             String mapped = mapClassName(outer, packageMap, classMap);
-            if  (mapped == null) return null;
+            if  (mapped == null) return getNextAutoRemapName(classMap,outer);
             return mapped + className.substring(index);
         }
 
         if (packageMap != null) {
-            Iterator<String> iter = packageMap.keySet().iterator();
-            while (iter.hasNext()) {
-                String oldPackage = iter.next();
+            for (String oldPackage : packageMap.keySet()) {
                 if (matchClassPackage(oldPackage, className)) {
                     String newPackage = packageMap.get(oldPackage);
 
@@ -122,7 +136,7 @@ public class JarRemapper extends CustomRemapper {
             }
         }
 
-        return null;
+        return getNextAutoRemapName(classMap,className);
     }
 
     private static boolean matchClassPackage(String packageName, String className) {
@@ -181,15 +195,17 @@ public class JarRemapper extends CustomRemapper {
         }
         ClassRepo repo = new JarRepo(jar);
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(target))) {
-            Set<String> jarEntries = jar.getEntryNames();
+            List<String> jarEntries = new ArrayList<>(jar.getEntryNames());
             ProgressMeter meter = new ProgressMeter(jarEntries.size(), "Remapping jar... %2.0f%%");
 
-            for (String name : jarEntries) {
+            for (int i = 0; i < jarEntries.size(); i++) {
+                String name = jarEntries.get(i);
                 JarEntry entry;
 
                 try (InputStream is = jar.getResource(name)) {
                     byte[] data;
-                    if (name.endsWith(".class") && shouldHandle(name, includes)) {
+                    if (name.endsWith(".class") && shouldHandle(name, includes) && (!SpecialSource.kill_pkgInfo || !name
+                            .contains("package-info.class"))) {
                         // remap classes
                         name = name.substring(0, name.length() - CLASS_LEN);
 
@@ -201,11 +217,14 @@ public class JarRemapper extends CustomRemapper {
                         // skip signatures
                         continue;
                     } else {
-                        // copy other resources
-                        if (!copyResources) {
+                        // copy other resources exclude the package-info
+                        if (!copyResources || name.contains("package-info.class")) {
                             continue; // unless generating an API
                         }
                         entry = new JarEntry(name);
+                        if (entry.isDirectory()) {
+                           continue;
+                        }
 
                         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
                         int n;
@@ -224,6 +243,15 @@ public class JarRemapper extends CustomRemapper {
 
                     meter.makeProgress();
                 }
+            }
+        }
+        if (SpecialSource.autoRemap) {
+            try (PrintWriter printWriter = new PrintWriter(new FileWriter(SpecialSource.autoRemapOutFile,SpecialSource.writeMethod.isAppend()),true)) {
+                Searge srg = new Searge(jar.getFilename(),target.getName());
+                for (Map.Entry<String, String> stringStringEntry : autoRemapClasses.entrySet()) {
+                    srg.addClassMap(stringStringEntry.getKey(),stringStringEntry.getValue());
+                }
+                srg.write(printWriter,SpecialSource.writeMethod.isAppend());
             }
         }
     }
@@ -256,7 +284,6 @@ public class JarRemapper extends CustomRemapper {
         return remapClassFile(new ClassReader(in), repo);
     }
 
-    @SuppressWarnings("unchecked")
     private byte[] remapClassFile(ClassReader reader, final ClassRepo repo) {
         if (preProcessor != null) {
             byte[] pre = preProcessor.process(reader);

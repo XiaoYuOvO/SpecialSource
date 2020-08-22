@@ -30,6 +30,7 @@ package net.md_5.specialsource;
 
 import net.md_5.specialsource.util.FileLocator;
 import net.md_5.specialsource.transformer.MavenShade;
+import net.md_5.specialsource.util.StringUtil;
 import net.md_5.specialsource.writer.CompactSearge;
 import net.md_5.specialsource.writer.Searge;
 import net.md_5.specialsource.writer.MappingWriter;
@@ -46,17 +47,19 @@ import org.objectweb.asm.commons.Remapper;
 
 public class JarMapping {
 
-    public final LinkedHashMap<String, String> packages = new LinkedHashMap<String, String>();
-    public final Map<String, String> classes = new HashMap<String, String>();
-    public final Map<String, String> fields = new HashMap<String, String>();
-    public final Map<String, String> methods = new HashMap<String, String>();
+    public final LinkedHashMap<String, String> packages = new LinkedHashMap<>();
+    public final Map<String, String> classes = new HashMap<>();
+    public final Map<String, String> fields = new HashMap<>();
+    public final Map<String, String> methods = new HashMap<>();
+
     private InheritanceMap inheritanceMap = new InheritanceMap();
     private InheritanceProvider fallbackInheritanceProvider = null;
-    private Set<String> excludedPackages = new HashSet<String>();
+    private Set<String> excludedPackages = new HashSet<>();
     private String currentClass = null;
 
     public JarMapping() {
     }
+
 
     /**
      * Set the inheritance map used for caching superclass/interfaces. This call
