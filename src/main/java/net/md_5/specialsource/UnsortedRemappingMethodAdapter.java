@@ -28,6 +28,9 @@
  */
 package net.md_5.specialsource;
 
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.Arrays;
 import java.util.Collection;
 
@@ -44,6 +47,16 @@ import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodNode;
 
 public class UnsortedRemappingMethodAdapter extends MethodRemapper {
+
+    private final PrintWriter writer;
+
+    {
+        try {
+            writer = new PrintWriter(new FileWriter("inv_dyn.srg",true),true);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     private static final Collection<Handle> META_FACTORIES = Arrays.asList(
             new Handle(Opcodes.H_INVOKESTATIC, "java/lang/invoke/LambdaMetafactory", "metafactory",
@@ -126,17 +139,39 @@ public class UnsortedRemappingMethodAdapter extends MethodRemapper {
             String odesc = ((Type) bsmArgs[0]).getDescriptor(); // First constant argument is "samMethodType - Signature and return type of method to be implemented by the function object."
             // index 2 is the signature, but with generic types. Should we use that instead?
             name = remapper.mapMethodName(owner, name, odesc, findAccess(NodeType.METHOD, owner, name, odesc));
+                Handle bsmArg = ((Handle) bsmArgs[1]);
+                Handle mapped = (Handle) remapper.mapValue(bsmArg);
+            writer.println("MD: " + (bsmArg.getOwner() + "/" +bsmArg.getName() + " " + bsmArg.getDesc() + mapped.getOwner() + "/" +mapped.getName() + " " + mapped.getDesc()));
         } else {
             name = remapper.mapInvokeDynamicMethodName(name, desc);
+        }
+
+        if (bsm.getOwner().equals("java/lang/runtime/ObjectMethods")) {
+            // TODO: consider asserting name (the parameter) equals hashCode, toString, or equals
+            Type clazz = (Type) bsmArgs[0];
+
+            // TODO: consider asserting (String)bsmArgs[1] == "step;feature"
+            for (int i = 2; i < bsmArgs.length; i++) {
+                Handle h = (Handle) bsmArgs[i];
+                String newName = remapper.mapFieldName(clazz.getInternalName(), h.getName(), h.getDesc(), 0);
+                bsmArgs[i] = new Handle(h.getTag(), h.getOwner(), newName, h.getDesc(), h.isInterface());
+            }
         }
 
         for (int i = 0; i < bsmArgs.length; i++) {
             bsmArgs[i] = remapper.mapValue(bsmArgs[i]);
         }
 
+
         mv.visitInvokeDynamicInsn(
                 name,
                 remapper.mapMethodDesc(desc), (Handle) remapper.mapValue(bsm),
                 bsmArgs);
+    }
+
+    @Override
+    public void visitEnd() {
+        super.visitEnd();
+        this.writer.close();
     }
 }

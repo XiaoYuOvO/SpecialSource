@@ -30,7 +30,7 @@ package net.md_5.specialsource;
 
 import net.md_5.specialsource.util.FileLocator;
 import net.md_5.specialsource.transformer.MavenShade;
-import net.md_5.specialsource.util.StringUtil;
+import net.md_5.specialsource.util.Pair;
 import net.md_5.specialsource.writer.CompactSearge;
 import net.md_5.specialsource.writer.Searge;
 import net.md_5.specialsource.writer.MappingWriter;
@@ -51,7 +51,9 @@ public class JarMapping {
     public final Map<String, String> classes = new HashMap<>();
     public final Map<String, String> fields = new HashMap<>();
     public final Map<String, String> methods = new HashMap<>();
-
+    private final Map<String, Pair<Ownable>> unusedMethod = new HashMap<>();
+    private final Map<String,Pair<Ownable>> unusedField = new HashMap<>();
+    private final Map<String,String> unusedClass = new HashMap<>();
     private InheritanceMap inheritanceMap = new InheritanceMap();
     private InheritanceProvider fallbackInheritanceProvider = null;
     private Set<String> excludedPackages = new HashSet<>();
@@ -97,6 +99,22 @@ public class JarMapping {
         return false;
     }
 
+    public Searge gatherAllUnused(String oldJarName,String newJarName){
+        Searge searge = new Searge(oldJarName, newJarName);
+        for (Map.Entry<String, String> stringStringEntry : this.unusedClass.entrySet()) {
+            searge.addClassMap(stringStringEntry.getKey(),stringStringEntry.getValue());
+        }
+
+        for (Map.Entry<String, Pair<Ownable>> stringPairEntry : this.unusedField.entrySet()) {
+            searge.addFieldMap(stringPairEntry.getValue().first,stringPairEntry.getValue().second);
+        }
+        for (Map.Entry<String, Pair<Ownable>> stringPairEntry : this.unusedMethod.entrySet()) {
+            searge.addMethodMap(stringPairEntry.getValue().first,stringPairEntry.getValue().second);
+        }
+
+        return searge;
+    }
+
     public String tryClimb(Map<String, String> map, NodeType type, String owner, String name, int access) {
         String key = owner + "/" + name;
 
@@ -121,7 +139,21 @@ public class JarMapping {
                 }
             }
         }
+
+            switch (type) {
+                case FIELD:
+                    this.unusedField.remove(key);
+                    break;
+                case METHOD:
+                    this.unusedMethod.remove(key);
+                    break;
+            }
+
         return mapped;
+    }
+
+    public void removeUnusedClass(String key){
+        this.unusedClass.remove(key);
     }
 
     /**
@@ -288,12 +320,14 @@ public class JarMapping {
                     continue;
                 }
                 String[] tokens = l.split(" ");
-                clsMap.put(tokens[1], tokens[1]);
+                unusedClass.put(tokens[0], tokens[1]);
+                clsMap.put(tokens[0], tokens[1]);
             } else {
                 if (l.startsWith("\t")) {
                     continue;
                 }
                 String[] tokens = l.split(" ");
+                unusedClass.put(tokens[0], tokens[1]);
                 clsMap.put(tokens[0], tokens[1]);
             }
             meter.makeProgress();
@@ -352,6 +386,7 @@ public class JarMapping {
                     currentClass = tokens[1];
                 } else {
                     classes.put(oldClassName, newClassName);
+                    unusedClass.put(oldClassName,newClassName);
                     currentClass = tokens[0];
                 }
             }
@@ -372,7 +407,13 @@ public class JarMapping {
                 oldFieldName = temp;
             }
 
-            fields.put(oldClassName + "/" + oldFieldName, newFieldName);
+            String key = oldClassName + "/" + oldFieldName;
+            //Add to the unused
+            unusedField.put(key,new Pair<>(
+                    new Ownable(NodeType.FIELD,oldClassName,oldFieldName,"",0),
+                    new Ownable(NodeType.FIELD,reverseMap.map(oldClassName),newFieldName,"",0)));
+
+            fields.put(key, newFieldName);
         } else if (tokens.length == 4) {
             String oldClassName = inputTransformer.transformClassName(tokens[0]);
             String oldMethodName = inputTransformer.transformMethodName(tokens[0], tokens[1], tokens[2]);
@@ -392,7 +433,11 @@ public class JarMapping {
                 oldMethodName = temp;
             }
 
-            methods.put(oldClassName + "/" + oldMethodName + " " + oldMethodDescriptor, newMethodName);
+            String key = oldClassName + "/" + oldMethodName + " " + oldMethodDescriptor;
+            unusedMethod.put(key,new Pair<>(
+                    new Ownable(NodeType.METHOD,oldClassName,oldMethodName,oldMethodDescriptor,0),
+                    new Ownable(NodeType.METHOD,reverseMap.map(oldClassName),newMethodName,reverseMap.mapMethodDesc(oldMethodDescriptor),0)));
+            methods.put(key, newMethodName);
         } else {
             throw new IOException("Invalid csrg file line, token count " + tokens.length + " unexpected in " + line);
         }
@@ -406,146 +451,165 @@ public class JarMapping {
         String[] tokens = line.split(" ");
         String kind = tokens[0];
 
-        if (kind.equals("CL:")) {
-            String oldClassName = inputTransformer.transformClassName(tokens[1]);
-            String newClassName = outputTransformer.transformClassName(tokens[2]);
+        switch (kind) {
+            case "CL:": {
+                String oldClassName = inputTransformer.transformClassName(tokens[1]);
+                String newClassName = outputTransformer.transformClassName(tokens[2]);
 
-            if (reverse) {
-                String temp = newClassName;
-                newClassName = oldClassName;
-                oldClassName = temp;
+                if (reverse) {
+                    String temp = newClassName;
+                    newClassName = oldClassName;
+                    oldClassName = temp;
+                }
+
+                if (isExcludedPackage(oldClassName)) {
+                    SpecialSource.log("Ignored CL: " + oldClassName + " " + newClassName);
+                    return;
+                }
+
+                if (classes.containsKey(oldClassName) && !newClassName.equals(classes.get(oldClassName))) {
+                    throw new IllegalArgumentException("Duplicate class mapping: " + oldClassName + " -> " + newClassName
+                            + " but already mapped to " + classes.get(oldClassName) + " in line=" + line);
+                }
+
+                if (oldClassName.endsWith("/*") && newClassName.endsWith("/*")) {
+                    // extension for remapping class name prefixes
+                    oldClassName = oldClassName.substring(0, oldClassName.length() - 1);
+                    newClassName = newClassName.substring(0, newClassName.length() - 1);
+
+                    packages.put(oldClassName, newClassName);
+                } else {
+                    classes.put(oldClassName, newClassName);
+                    unusedClass.put(oldClassName,newClassName);
+                    currentClass = tokens[1];
+                }
+                break;
             }
+            case "PK:":
+                String oldPackageName = inputTransformer.transformClassName(tokens[1]);
+                String newPackageName = outputTransformer.transformClassName(tokens[2]);
 
-            if (isExcludedPackage(oldClassName)) {
-                SpecialSource.log("Ignored CL: " + oldClassName + " " + newClassName);
-                return;
+                if (reverse) {
+                    String temp = newPackageName;
+                    newPackageName = oldPackageName;
+                    oldPackageName = temp;
+                }
+
+                if (isExcludedPackage(oldPackageName)) {
+                    SpecialSource.log("Ignored PK: " + oldPackageName + " -> " + newPackageName);
+                    return;
+                }
+
+                // package names always either 1) suffixed with '/', or 2) equal to '.' to signify default package
+                if (!newPackageName.equals(".") && !newPackageName.endsWith("/")) {
+                    newPackageName += "/";
+                }
+
+                if (!oldPackageName.equals(".") && !oldPackageName.endsWith("/")) {
+                    oldPackageName += "/";
+                }
+
+                if (packages.containsKey(oldPackageName) && !newPackageName.equals(packages.get(oldPackageName))) {
+                    throw new IllegalArgumentException("Duplicate package mapping: " + oldPackageName + " ->" + newPackageName
+                            + " but already mapped to " + packages.get(oldPackageName) + " in line=" + line);
+                }
+
+                packages.put(oldPackageName, newPackageName);
+                break;
+            case "FD:": {
+                String oldFull = tokens[1];
+                String newFull = tokens[2];
+
+                // Split the qualified field names into their classes and actual names
+                int splitOld = oldFull.lastIndexOf('/');
+                int splitNew = newFull.lastIndexOf('/');
+                if (splitOld == -1 || splitNew == -1) {
+                    throw new IllegalArgumentException("Field name is invalid, not fully-qualified: " + oldFull
+                            + " -> " + newFull + " in line=" + line);
+                }
+
+                String oldClassName = inputTransformer.transformClassName(oldFull.substring(0, splitOld));
+                String oldFieldName = inputTransformer.transformFieldName(oldFull.substring(0, splitOld), oldFull.substring(splitOld + 1));
+                String newClassName = outputTransformer.transformClassName(newFull.substring(0, splitNew)); // TODO: verify with existing class map? (only used for reverse)
+
+                String newFieldName = outputTransformer.transformFieldName(oldFull.substring(0, splitOld), newFull.substring(splitNew + 1));
+
+                if (reverse) {
+                    oldClassName = newClassName;
+
+                    String temp = newFieldName;
+                    newFieldName = oldFieldName;
+                    oldFieldName = temp;
+                }
+
+                if (isExcludedPackage(oldClassName)) {
+                    SpecialSource.log("Ignored FD: " + oldClassName + "/" + oldFieldName + " -> " + newFieldName);
+                    return;
+                }
+
+                String oldEntry = oldClassName + "/" + oldFieldName;
+                if (fields.containsKey(oldEntry) && !newFieldName.equals(fields.get(oldEntry))) {
+                    throw new IllegalArgumentException("Duplicate field mapping: " + oldEntry + " ->" + newFieldName
+                            + " but already mapped to " + fields.get(oldEntry) + " in line=" + line);
+                }
+                //Add to the unused groups
+                unusedField.put(oldEntry,new Pair<>(new Ownable(NodeType.FIELD,oldClassName,oldFieldName,"",0),new Ownable(NodeType.FIELD,newClassName,newFieldName,"",0)));
+
+                fields.put(oldEntry, newFieldName);
+                break;
             }
+            case "MD:": {
+                String oldFull = tokens[1];
+                String newFull = tokens[3];
 
-            if (classes.containsKey(oldClassName) && !newClassName.equals(classes.get(oldClassName))) {
-                throw new IllegalArgumentException("Duplicate class mapping: " + oldClassName + " -> " + newClassName
-                        + " but already mapped to " + classes.get(oldClassName) + " in line=" + line);
+                // Split the qualified field names into their classes and actual names TODO: refactor with below
+                int splitOld = oldFull.lastIndexOf('/');
+                int splitNew = newFull.lastIndexOf('/');
+                if (splitOld == -1 || splitNew == -1) {
+                    throw new IllegalArgumentException("Field name is invalid, not fully-qualified: " + oldFull
+                            + " -> " + newFull + " in line=" + line);
+                }
+
+                String oldClassName = inputTransformer.transformClassName(oldFull.substring(0, splitOld));
+                String oldMethodName = inputTransformer.transformMethodName(oldFull.substring(0, splitOld), oldFull.substring(splitOld + 1), tokens[2]);
+                String oldMethodDescriptor = inputTransformer.transformMethodDescriptor(tokens[2]);
+                String newClassName = outputTransformer.transformClassName(newFull.substring(0, splitNew)); // TODO: verify with existing class map? (only used for reverse)
+
+                String newMethodName = outputTransformer.transformMethodName(oldFull.substring(0, splitOld), newFull.substring(splitNew + 1), tokens[2]);
+                String newMethodDescriptor = outputTransformer.transformMethodDescriptor(tokens[4]); // TODO: verify with existing class map? (only used for reverse)
+
+                // TODO: support isClassIgnored() on reversed method descriptors
+
+                if (reverse) {
+                    oldClassName = newClassName;
+                    oldMethodDescriptor = newMethodDescriptor;
+
+                    String temp = newMethodName;
+                    newMethodName = oldMethodName;
+                    oldMethodName = temp;
+                }
+
+                if (isExcludedPackage(oldClassName)) {
+                    SpecialSource.log("Ignored MD: " + oldClassName + "/" + oldMethodName + " -> " + newMethodName);
+                    return;
+                }
+
+                String oldEntry = oldClassName + "/" + oldMethodName + " " + oldMethodDescriptor;
+                if (methods.containsKey(oldEntry) && !newMethodName.equals(methods.get(oldEntry))) {
+                    throw new IllegalArgumentException("Duplicate method mapping: " + oldEntry + " ->" + newMethodName
+                            + " but already mapped to " + methods.get(oldEntry) + " in line=" + line);
+                }
+
+                //Add to the unused
+                unusedMethod.put(oldEntry,new Pair<>(
+                        new Ownable(NodeType.METHOD,oldClassName,oldMethodName,oldMethodDescriptor,0),
+                        new Ownable(NodeType.METHOD,newClassName,newMethodName,newMethodDescriptor,0)));
+
+                methods.put(oldEntry, newMethodName);
+                break;
             }
-
-            if (oldClassName.endsWith("/*") && newClassName.endsWith("/*")) {
-                // extension for remapping class name prefixes
-                oldClassName = oldClassName.substring(0, oldClassName.length() - 1);
-                newClassName = newClassName.substring(0, newClassName.length() - 1);
-
-                packages.put(oldClassName, newClassName);
-            } else {
-                classes.put(oldClassName, newClassName);
-                currentClass = tokens[1];
-            }
-        } else if (kind.equals("PK:")) {
-            String oldPackageName = inputTransformer.transformClassName(tokens[1]);
-            String newPackageName = outputTransformer.transformClassName(tokens[2]);
-
-            if (reverse) {
-                String temp = newPackageName;
-                newPackageName = oldPackageName;
-                oldPackageName = temp;
-            }
-
-            if (isExcludedPackage(oldPackageName)) {
-                SpecialSource.log("Ignored PK: " + oldPackageName + " -> " + newPackageName);
-                return;
-            }
-
-            // package names always either 1) suffixed with '/', or 2) equal to '.' to signify default package
-            if (!newPackageName.equals(".") && !newPackageName.endsWith("/")) {
-                newPackageName += "/";
-            }
-
-            if (!oldPackageName.equals(".") && !oldPackageName.endsWith("/")) {
-                oldPackageName += "/";
-            }
-
-            if (packages.containsKey(oldPackageName) && !newPackageName.equals(packages.get(oldPackageName))) {
-                throw new IllegalArgumentException("Duplicate package mapping: " + oldPackageName + " ->" + newPackageName
-                        + " but already mapped to " + packages.get(oldPackageName) + " in line=" + line);
-            }
-
-            packages.put(oldPackageName, newPackageName);
-        } else if (kind.equals("FD:")) {
-            String oldFull = tokens[1];
-            String newFull = tokens[2];
-
-            // Split the qualified field names into their classes and actual names
-            int splitOld = oldFull.lastIndexOf('/');
-            int splitNew = newFull.lastIndexOf('/');
-            if (splitOld == -1 || splitNew == -1) {
-                throw new IllegalArgumentException("Field name is invalid, not fully-qualified: " + oldFull
-                        + " -> " + newFull + " in line=" + line);
-            }
-
-            String oldClassName = inputTransformer.transformClassName(oldFull.substring(0, splitOld));
-            String oldFieldName = inputTransformer.transformFieldName(oldFull.substring(0, splitOld), oldFull.substring(splitOld + 1));
-            String newClassName = outputTransformer.transformClassName(newFull.substring(0, splitNew)); // TODO: verify with existing class map? (only used for reverse)
-            String newFieldName = outputTransformer.transformFieldName(oldFull.substring(0, splitOld), newFull.substring(splitNew + 1));
-
-            if (reverse) {
-                oldClassName = newClassName;
-
-                String temp = newFieldName;
-                newFieldName = oldFieldName;
-                oldFieldName = temp;
-            }
-
-            if (isExcludedPackage(oldClassName)) {
-                SpecialSource.log("Ignored FD: " + oldClassName + "/" + oldFieldName + " -> " + newFieldName);
-                return;
-            }
-
-            String oldEntry = oldClassName + "/" + oldFieldName;
-            if (fields.containsKey(oldEntry) && !newFieldName.equals(fields.get(oldEntry))) {
-                throw new IllegalArgumentException("Duplicate field mapping: " + oldEntry + " ->" + newFieldName
-                        + " but already mapped to " + fields.get(oldEntry) + " in line=" + line);
-            }
-
-            fields.put(oldEntry, newFieldName);
-        } else if (kind.equals("MD:")) {
-            String oldFull = tokens[1];
-            String newFull = tokens[3];
-
-            // Split the qualified field names into their classes and actual names TODO: refactor with below
-            int splitOld = oldFull.lastIndexOf('/');
-            int splitNew = newFull.lastIndexOf('/');
-            if (splitOld == -1 || splitNew == -1) {
-                throw new IllegalArgumentException("Field name is invalid, not fully-qualified: " + oldFull
-                        + " -> " + newFull + " in line=" + line);
-            }
-
-            String oldClassName = inputTransformer.transformClassName(oldFull.substring(0, splitOld));
-            String oldMethodName = inputTransformer.transformMethodName(oldFull.substring(0, splitOld), oldFull.substring(splitOld + 1), tokens[2]);
-            String oldMethodDescriptor = inputTransformer.transformMethodDescriptor(tokens[2]);
-            String newClassName = outputTransformer.transformClassName(newFull.substring(0, splitNew)); // TODO: verify with existing class map? (only used for reverse)
-            String newMethodName = outputTransformer.transformMethodName(oldFull.substring(0, splitOld), newFull.substring(splitNew + 1), tokens[2]);
-            String newMethodDescriptor = outputTransformer.transformMethodDescriptor(tokens[4]); // TODO: verify with existing class map? (only used for reverse)
-            // TODO: support isClassIgnored() on reversed method descriptors
-
-            if (reverse) {
-                oldClassName = newClassName;
-                oldMethodDescriptor = newMethodDescriptor;
-
-                String temp = newMethodName;
-                newMethodName = oldMethodName;
-                oldMethodName = temp;
-            }
-
-            if (isExcludedPackage(oldClassName)) {
-                SpecialSource.log("Ignored MD: " + oldClassName + "/" + oldMethodName + " -> " + newMethodName);
-                return;
-            }
-
-            String oldEntry = oldClassName + "/" + oldMethodName + " " + oldMethodDescriptor;
-            if (methods.containsKey(oldEntry) && !newMethodName.equals(methods.get(oldEntry))) {
-                throw new IllegalArgumentException("Duplicate method mapping: " + oldEntry + " ->" + newMethodName
-                        + " but already mapped to " + methods.get(oldEntry) + " in line=" + line);
-            }
-
-            methods.put(oldEntry, newMethodName);
-        } else {
-            throw new IllegalArgumentException("Unable to parse srg file, unrecognized mapping type in line=" + line);
+            default:
+                throw new IllegalArgumentException("Unable to parse srg file, unrecognized mapping type in line=" + line);
         }
     }
 
@@ -607,5 +671,16 @@ public class JarMapping {
         try (PrintWriter out = (logfile == null ? new PrintWriter(System.out) : new PrintWriter(logfile))) {
             srgWriter.write(out);
         }
+    }
+
+    @Override
+    protected JarMapping clone() {
+        JarMapping jarMapping = new JarMapping();
+        jarMapping.packages.putAll(this.packages);
+        jarMapping.classes.putAll(this.classes);
+        jarMapping.methods.putAll(this.methods);
+        jarMapping.fields.putAll(this.fields);
+        jarMapping.inheritanceMap = this.inheritanceMap;
+        return jarMapping;
     }
 }

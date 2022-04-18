@@ -32,6 +32,8 @@ import java.io.*;
 import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+
+import com.sun.istack.internal.Nullable;
 import net.md_5.specialsource.repo.ClassRepo;
 import net.md_5.specialsource.repo.JarRepo;
 import net.md_5.specialsource.util.StringUtil;
@@ -51,11 +53,13 @@ public class JarRemapper extends CustomRemapper {
     private int writerFlags = COMPUTE_MAXS;
     private int readerFlags = 0;
     private boolean copyResources = true;
+    private final JarMapping unusedMappings;
 
     public JarRemapper(RemapperProcessor preProcessor, JarMapping jarMapping, RemapperProcessor postProcessor) {
         this.preProcessor = preProcessor;
         this.jarMapping = jarMapping;
         this.postProcessor = postProcessor;
+        this.unusedMappings = jarMapping.clone();
     }
 
     public JarRemapper(RemapperProcessor remapperPreprocessor, JarMapping jarMapping) {
@@ -84,20 +88,25 @@ public class JarRemapper extends CustomRemapper {
 
     @Override
     public String map(String typeName) {
-        return mapTypeName(typeName, jarMapping.packages, jarMapping.classes, typeName);
+        return mapTypeName(typeName, jarMapping.packages, jarMapping.classes, typeName,jarMapping);
+    }
+
+    public static String mapTypeName(String typeName, Map<String, String> packageMap, Map<String, String> classMap, String defaultIfUnmapped,@Nullable JarMapping mapping) {
+        String mapped = mapClassName(typeName, packageMap, classMap,mapping);
+        return mapped != null ? mapped : defaultIfUnmapped;
     }
 
     public static String mapTypeName(String typeName, Map<String, String> packageMap, Map<String, String> classMap, String defaultIfUnmapped) {
-        String mapped = mapClassName(typeName, packageMap, classMap);
+        String mapped = mapClassName(typeName, packageMap, classMap,null);
         return mapped != null ? mapped : defaultIfUnmapped;
     }
 
     public static String getNextAutoRemapName(Map<String,String> classes,String className){
         if (SpecialSource.autoRemapFilter.isEmpty() || SpecialSource.autoRemapFilter.stream().anyMatch(className::contains)) {
             if (classes != null) {
-                String next = StringUtil.toBase26(autoRemapNameIndex);
+                String next = SpecialSource.autoRemapPrefix + StringUtil.toBase26(autoRemapNameIndex);
                 while (classes.containsValue(next)) {
-                    next = StringUtil.toBase26(autoRemapNameIndex++);
+                    next = SpecialSource.autoRemapPrefix + StringUtil.toBase26(autoRemapNameIndex++);
                 }
                 classes.put(className, next);
                 autoRemapClasses.put(className,next);
@@ -109,22 +118,30 @@ public class JarRemapper extends CustomRemapper {
     }
 
 
+    @Override
+    public String mapSignature(String signature, boolean typeSignature) {
+        return super.mapSignature(signature, typeSignature);
+    }
+
     /**
      * Helper method to map a class name by package (prefix) or class (exact)
      */
-    private static String mapClassName(String className, Map<String, String> packageMap, Map<String, String> classMap) {
+    private static String mapClassName(String className, Map<String, String> packageMap, Map<String, String> classMap,@Nullable JarMapping mapping) {
         if (classMap != null && classMap.containsKey(className)) {
+            if (mapping != null){
+                mapping.removeUnusedClass(className);
+            }
             return classMap.get(className);
         }
         
-        int index = className.lastIndexOf('$');
-        if (index != -1)
-        {
-            String outer = className.substring(0, index);
-            String mapped = mapClassName(outer, packageMap, classMap);
-            if  (mapped == null) return getNextAutoRemapName(classMap,outer);
-            return mapped + className.substring(index);
-        }
+//        int index = className.lastIndexOf('$');
+//        if (index != -1)
+//        {
+//            String outer = className.substring(0, index);
+//            String mapped = mapClassName(outer, packageMap, classMap,mapping);
+//            if  (mapped == null) return SpecialSource.autoRemap ? getNextAutoRemapName(classMap,outer) : null;
+//            return mapped + className.substring(index);
+//        }
 
         if (packageMap != null) {
             for (String oldPackage : packageMap.keySet()) {
@@ -136,7 +153,7 @@ public class JarRemapper extends CustomRemapper {
             }
         }
 
-        return getNextAutoRemapName(classMap,className);
+        return SpecialSource.autoRemap ? getNextAutoRemapName(classMap,className) : null;
     }
 
     private static boolean matchClassPackage(String packageName, String className) {
@@ -198,8 +215,7 @@ public class JarRemapper extends CustomRemapper {
             List<String> jarEntries = new ArrayList<>(jar.getEntryNames());
             ProgressMeter meter = new ProgressMeter(jarEntries.size(), "Remapping jar... %2.0f%%");
 
-            for (int i = 0; i < jarEntries.size(); i++) {
-                String name = jarEntries.get(i);
+            for (String name : jarEntries) {
                 JarEntry entry;
 
                 try (InputStream is = jar.getResource(name)) {
@@ -223,12 +239,12 @@ public class JarRemapper extends CustomRemapper {
                         }
                         entry = new JarEntry(name);
                         if (entry.isDirectory()) {
-                           continue;
+                            continue;
                         }
 
                         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
                         int n;
-                        byte[] b = new byte[1 << 15]; // Max class file size
+                        byte[] b = new byte[32768]; // Max class file size
                         while ((n = is.read(b, 0, b.length)) != -1) {
                             buffer.write(b, 0, n);
                         }
@@ -253,6 +269,20 @@ public class JarRemapper extends CustomRemapper {
                 }
                 srg.write(printWriter,SpecialSource.writeMethod.isAppend());
             }
+        }
+        StringBuilder sb = new StringBuilder();
+//        sb.append("CLASSES: \n");
+//        for (Map.Entry<String, String> stringStringEntry : unusedMappings.classes.entrySet()) {
+//            sb.append(stringStringEntry.getKey() + " -> " + stringStringEntry.getValue() + "\n");
+//        }
+//
+//        sb.append("METHODS: \n");
+//        jarMapping.
+//        sb.append("FIELDS: \n");
+
+
+        try(PrintWriter writer = new PrintWriter(new FileWriter("./unused_mappings.srg"),true)) {
+            this.jarMapping.gatherAllUnused(jar.getFilename(),target.getName()).write(writer,false);
         }
     }
 
@@ -293,7 +323,7 @@ public class JarRemapper extends CustomRemapper {
         }
 
         ClassNode node = new ClassNode();
-        RemappingClassAdapter mapper = new RemappingClassAdapter(node, this, repo);
+        RemappingClassAdapter mapper = new RemappingClassAdapter(node, this, repo,reader.getClassName());
         reader.accept(mapper, readerFlags);
 
         ClassWriter wr = new ClassWriter(writerFlags);

@@ -35,7 +35,7 @@ import org.objectweb.asm.commons.SignatureRemapper;
 import org.objectweb.asm.signature.SignatureVisitor;
 
 public abstract class CustomRemapper extends Remapper {
-
+    private String currentClassName;
     @Override
     public String mapMethodName(String owner, String name, String desc) {
         return mapMethodName(owner, name, desc, 0);
@@ -43,6 +43,10 @@ public abstract class CustomRemapper extends Remapper {
 
     public String mapMethodName(String owner, String name, String desc, int access) {
         return name;
+    }
+
+    public void addMethodName(String owner, String name, String desc, int access,String newName) {
+
     }
 
     @Override
@@ -54,13 +58,25 @@ public abstract class CustomRemapper extends Remapper {
         return name;
     }
 
+    public void addFieldName(String owner, String name, String desc, int access,String newName){
+
+    }
+
+    public String mapRecordComponentName(String owner, String name, String descriptor) {
+        return this.mapFieldName(owner, name, descriptor);
+    }
+
     @Override
     public String mapSignature(String signature, boolean typeSignature) {
         // JDT decorates some lambdas with this and SignatureReader chokes on it
-        if (signature != null && signature.contains("!*")) {
+        if (signature != null && signature.contains("!*") || (SpecialSource.kill_sig && !SpecialSource.killSigExclude.contains(this.currentClassName))) {
             return null;
         }
         return super.mapSignature(signature, typeSignature);
+    }
+
+    public void setCurrentClassName(String currentClassName) {
+        this.currentClassName = currentClassName;
     }
 
     @Override
@@ -77,10 +93,15 @@ public abstract class CustomRemapper extends Remapper {
      *   Good: (TK;)Lzt<TK;TT;TR;>.a;
      */
     static class ProguardSignatureFixer extends SignatureRemapper {
-        private Stack<String> classNames = new Stack<String>();
+        private Stack<String> classNames = new Stack<>();
 
         ProguardSignatureFixer(SignatureVisitor sv, Remapper m) {
             super(sv, m);
+        }
+
+        @Override
+        public void visitTypeVariable(String name) {
+            super.visitTypeVariable(name);
         }
 
         @Override

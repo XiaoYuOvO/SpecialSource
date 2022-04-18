@@ -57,10 +57,14 @@ public class SpecialSource {
     public static boolean stable = false;
     public static boolean kill_pkgInfo = false;
     public static boolean kill_emptyDir = false;
+    public static boolean kill_sig = false;
     public static boolean autoRemap = false;
     public static WriteMethod writeMethod = WriteMethod.REPLACE;
     public static File autoRemapOutFile;
     public static List<String> autoRemapFilter;
+    public static final List<String> killSigExclude = new ArrayList<>();
+
+    public static String autoRemapPrefix = "";
 
     public static void main(String[] args) throws Exception {
         OptionParser parser = new OptionParser() {
@@ -137,6 +141,8 @@ public class SpecialSource {
                 acceptsAll(asList("kill-generics"), "Removes the \"LocalVariableTypeTable\" and \"Signature\" attributes");
                 acceptsAll(asList("kill-pkgInfo"),"Remove the \"package-info.class\"");
                 acceptsAll(asList("kill-emptyDir"),"Remove the dir that doesn't contains any files");
+                acceptsAll(asList("kill-sig"),"Kill the method and fields' signatures");
+                acceptsAll(asList("kill-sig-exclude"),"Kill the method and fields' signatures").withOptionalArg().ofType(String.class);
 
                 accepts("remapWriteMethod","The method to write auto remapped mapping,can be REPLACE or APPEND").
                         withOptionalArg().
@@ -149,6 +155,10 @@ public class SpecialSource {
                         ofType(File.class).
                         describedAs("The file to write auto remapped mapping").
                         defaultsTo(new File("auto_remap.srg"));
+                acceptsAll(asList("autoRemapPrefix"),"The prefix which will be prepended before the auto remapped name").
+                        withOptionalArg().
+                        ofType(String.class).
+                        defaultsTo("net/minecraft/");
 
                 acceptsAll(asList("d", "identifier"), "Identifier to place on each class that is transformed, by default, none")
                         .withRequiredArg()
@@ -200,6 +210,9 @@ public class SpecialSource {
         if (options.has("autoRemap")){
             autoRemap = true;
             autoRemapOutFile = ((File) options.valueOf("autoRemap"));
+            if (options.has("autoRemapPrefix")){
+                autoRemapPrefix = ((String) options.valueOf("autoRemapPrefix"));
+            }
         }
 
         if (options.has("autoRemapFilter")){
@@ -224,7 +237,16 @@ public class SpecialSource {
         kill_generics = options.has("kill-generics");
         kill_pkgInfo = options.has("kill-pkgInfo");
         kill_emptyDir = options.has("kill-emptyDir");
-        
+        kill_sig = options.has("kill-sig");
+        if (kill_sig && options.has("kill-sig-exclude")){
+            File file = FileLocator.getFile((String) options.valueOf("kill-sig-exclude"));
+            if (file.exists()) {
+                Scanner scanner = new Scanner(file);
+                while (scanner.hasNextLine()){
+                    killSigExclude.add(scanner.nextLine());
+                }
+            }
+        }
         if (options.has("identifier"))
         {
             identifier = (String)options.valueOf("identifier");

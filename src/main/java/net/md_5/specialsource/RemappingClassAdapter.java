@@ -68,26 +68,45 @@ import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.commons.ClassRemapper;
 import org.objectweb.asm.commons.FieldRemapper;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.MethodNode;
 
 public class RemappingClassAdapter extends ClassRemapper {
 
     protected final CustomRemapper remapper;
     protected ClassRepo repo;
 
-    public RemappingClassAdapter(final ClassVisitor cv, final CustomRemapper remapper, ClassRepo repo) {
+    public RemappingClassAdapter(final ClassVisitor cv, final CustomRemapper remapper, ClassRepo repo,String rawClassName) {
         super(cv, remapper);
         Preconditions.checkArgument(cv != null, "cv");
 
         this.repo = repo;
         this.remapper = remapper;
+        this.remapper.setCurrentClassName(rawClassName);
+    }
+
+    @Override
+    public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
+        super.visit(version, access, name, signature, superName, interfaces);
     }
 
     @Override
     public MethodVisitor visitMethod(int access, String name, String desc,
             String signature, String[] exceptions) {
         String newDesc = remapper.mapMethodDesc(desc);
-        MethodVisitor mv = cv.visitMethod(access, remapper.mapMethodName(
-                className, name, desc, access), newDesc, remapper.mapSignature(
+        String newName = remapper.mapMethodName(className, name, desc, access);
+        if (this.cv instanceof ClassNode){
+            for (MethodNode method : ((ClassNode) cv).methods) {
+                if (method.name.equals(newName) && method.desc.equals(newDesc)) {
+                    newName += "_";
+
+                    remapper.addMethodName(className, name, newDesc,access,newName);
+                    break;
+                }
+            }
+        }
+        MethodVisitor mv = cv.visitMethod(access,newName , newDesc, remapper.mapSignature(
                 signature, false),
                 exceptions == null ? null : remapper.mapTypes(exceptions));
         return mv == null ? null : createMethodRemapper(mv);
@@ -96,8 +115,18 @@ public class RemappingClassAdapter extends ClassRemapper {
     @Override
     public FieldVisitor visitField(int access, String name, String desc,
             String signature, Object value) {
+        String newName = remapper.mapFieldName(className, name, desc, access);
+        if (this.cv instanceof ClassNode){
+            for (FieldNode field : ((ClassNode) cv).fields) {
+                if (field.name.equals(newName) && field.desc.equals(desc)) {
+                    newName += "_";
+                    remapper.addFieldName(className, name, signature,access,newName);
+                    break;
+                }
+            }
+        }
         FieldVisitor fv = cv.visitField(access,
-                remapper.mapFieldName(className, name, desc, access),
+                newName,
                 remapper.mapDesc(desc), remapper.mapSignature(signature, true),
                 remapper.mapValue(value));
         return fv == null ? null : createFieldRemapper(fv);

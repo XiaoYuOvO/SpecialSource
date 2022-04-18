@@ -10,7 +10,7 @@
 
     <groupId>net.md-5</groupId>
     <artifactId>SpecialSource</artifactId>
-    <version>1.8.7-SNAPSHOT-FIXED</version>
+    <version>1.8.8-SNAPSHOT-FIXED</version>
     <packaging>jar</packaging>
 
     <name>SpecialSource</name>
@@ -45,7 +45,7 @@
         <dependency>
             <groupId>org.ow2.asm</groupId>
             <artifactId>asm-commons</artifactId>
-            <version>7.3.1</version>
+            <version>9.2</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -143,6 +143,10 @@
                 <configuration>
                     <source>8</source>
                     <target>8</target>
+                    <compilerArgs>
+                        <arg>-extdirs</arg>
+                        <arg>${project.basedir}/libs</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
         </plugins>
